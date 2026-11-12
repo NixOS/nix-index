@@ -3,10 +3,10 @@ description = "Nix (package manager) indexing primitives"
 authors = ["Benno Fünfstück <benno.fuenfstueck@gmail.com>"]
 edition = "2021"
 name = "nix-index"
-version = "0.1.9"
+version = "0.1.12"
 license = "BSD-3-Clause"
-homepage = "https://github.com/nix-community/nix-index"
-repository = "https://github.com/nix-community/nix-index"
+homepage = "https://github.com/NixOS/nix-index"
+repository = "https://github.com/NixOS/nix-index"
 readme = "README.md"
 keywords = [ "nixpkgs", "nixos", "nix", "indexing" ]
 include = [
@@ -26,29 +26,29 @@ name = "nix-index"
 name = "nix-locate"
 
 [dependencies]
-bincode = "1.3.3"
+bincode = { version = "2.0.1", features = ["serde"] }
 byteorder = "1.5.0"
-error-chain = "0.12.4"
 futures = "0.3.30"
-grep = "0.3.1"
+grep = "0.4.1"
 atty = "0.2.14"
 memchr = "2.7.2"
 num_cpus = "1.16.0"
-indexmap = "2.2.6"
+indexmap = "2.14.0"
 owo-colors = { version = "4.0.0", features = ["supports-colors"] }
-rayon = "1.10.0"
+rayon = "1.12.0"
 regex = "1.10.4"
-regex-syntax = "0.7.4"
-reqwest = { version = "0.12.3", features = [ "brotli" ] }
+regex-syntax = "0.8.5"
+reqwest = { version = "0.13.4", features = [ "brotli", "zstd" ] }
 separator = "0.4.1"
 serde = { version = "1.0.198", features = [ "derive" ] }
 serde_bytes = "0.11.14"
-serde_json = "1.0.116"
-tokio-retry = "0.3.0"
-xdg = "2.5.2"
-xml-rs = "0.8.20"
+serde_json = "1.0.150"
+thiserror = "2.0.12"
+tokio-retry = "0.3.1"
+xdg = "3.0.0"
+xml-rs = "1.0.0"
 xz2 = "0.1.7"
-zstd = { version = "0.12.4", features = [ "zstdmt" ] }
+zstd = { version = "0.13.3", features = [ "zstdmt" ] }
 clap_complete = "4.5.54"
 
 [dependencies.hyper]
@@ -58,15 +58,15 @@ version = "0.14.27"
 
 [dependencies.tokio]
 features = ["full"]
-version = "1.32.0"
+version = "1.52.3"
 
 [dependencies.clap]
-version = "4.3.24"
+version = "4.6.1"
 features = ["derive", "env"]
 
 [dependencies.rusqlite]
 features = ["backup"]
-version = "0.31.0"
+version = "0.40.0"
 
 [[example]]
 name = "nix-index-debug"

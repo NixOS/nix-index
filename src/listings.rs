@@ -7,30 +7,12 @@ use indexmap::map::Entry;
 use indexmap::IndexMap;
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 
-use crate::errors::{Error, ErrorKind, Result, ResultExt};
+use crate::errors::{Error, Result};
 use crate::files::FileTree;
 use crate::hydra::Fetcher;
 use crate::nixpkgs;
 use crate::package::StorePath;
 use crate::workset::{WorkSet, WorkSetHandle, WorkSetWatch};
-
-// We also add some additional sets that only show up in `nix-env -qa -A someSet`.
-//
-// Some of these sets are not build directly by hydra. We still include them here
-// since parts of these sets may be build as dependencies of other packages
-// that are build by hydra. This way, our attribute path information is more
-// accurate.
-//
-// We only need sets that are not marked "recurseIntoAttrs" here, since if they are,
-// they are already part of normal_paths.
-pub const EXTRA_SCOPES: [&str; 6] = [
-    "xorg",
-    "haskellPackages",
-    "rPackages",
-    "nodePackages",
-    "coqPackages",
-    "texlive.pkgs",
-];
 
 /// A stream of store paths (packages) with their associated file listings.
 ///
@@ -48,6 +30,7 @@ impl<T> FileListingStream for T where T: Stream<Item = Result<Option<(StorePath,
 ///
 /// The `jobs` argument is used to specify how many requests should be done in parallel. No more than
 /// `jobs` requests will be in-flight at any given time.
+#[allow(clippy::result_large_err)]
 fn fetch_listings_impl(
     fetcher: &Fetcher,
     jobs: usize,
@@ -80,7 +63,7 @@ fn fetch_listings_impl(
     let process = move |mut handle: WorkSetHandle<_, _>, path: StorePath| async move {
         let Some(parsed) = fetcher
             .fetch_references(path.clone())
-            .map_err(|e| Error::with_chain(e, ErrorKind::FetchReferences(path)))
+            .map_err(|e| Error::FetchReferences { path, source: e })
             .await?
         else {
             return Ok(None);
@@ -95,7 +78,10 @@ fn fetch_listings_impl(
         let nar_path = parsed.nar_path;
 
         match fetcher.fetch_files(&parsed.store_path).await {
-            Err(e) => Err(Error::with_chain(e, ErrorKind::FetchFiles(path))),
+            Err(e) => Err(Error::FetchFiles {
+                path: parsed.store_path,
+                source: e,
+            }),
             Ok(Some(files)) => Ok(Some((path, nar_path, files))),
             Ok(None) => Ok(None),
         }
@@ -112,16 +98,18 @@ fn fetch_listings_impl(
 /// Tries to load the file listings for all paths from a cache file named `paths.cache`.
 ///
 /// This function is used to implement the `--path-cache` option.
+#[allow(clippy::result_large_err)]
 pub fn try_load_paths_cache() -> Result<Option<(impl FileListingStream, WorkSetWatch)>> {
     let file = match File::open("paths.cache") {
         Ok(file) => file,
         Err(ref e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e).chain_err(|| ErrorKind::LoadPathsCache)?,
+        Err(e) => return Err(Error::LoadPathsCache { source: e })?,
     };
 
     let mut input = io::BufReader::new(file);
     let fetched: Vec<(StorePath, String, FileTree)> =
-        bincode::deserialize_from(&mut input).chain_err(|| ErrorKind::LoadPathsCache)?;
+        bincode::serde::decode_from_std_read(&mut input, bincode::config::standard())
+            .map_err(|e| Error::ParsePathsCache { source: e })?;
     let workset = WorkSet::from_iter(
         fetched
             .into_iter()
@@ -136,15 +124,24 @@ pub fn try_load_paths_cache() -> Result<Option<(impl FileListingStream, WorkSetW
     Ok(Some((stream, watch)))
 }
 
-pub fn fetch_listings<'a>(
+#[allow(clippy::result_large_err)]
+pub fn fetch<'a>(
     fetcher: &'a Fetcher,
     jobs: usize,
     nixpkgs: &str,
     systems: Vec<Option<&str>>,
+    extra_scopes: &[String],
     show_trace: bool,
 ) -> Result<(impl FileListingStream + 'a, WorkSetWatch)> {
     let mut scopes = vec![None];
-    scopes.extend(EXTRA_SCOPES.map(Some));
+    scopes.extend(
+        extra_scopes
+            .iter()
+            // allow --extra-scopes ""
+            .filter(|x| !x.is_empty())
+            .cloned()
+            .map(Some),
+    );
 
     let mut all_queries = vec![];
     for system in systems {
@@ -158,9 +155,9 @@ pub fn fetch_listings<'a>(
         .par_iter()
         .flat_map_iter(|&(system, scope)| {
             nixpkgs::query_packages(nixpkgs, system, scope.as_deref(), show_trace)
-                .map(|x| x.chain_err(|| ErrorKind::QueryPackages))
         })
-        .collect::<Result<_>>()?;
+        .collect::<std::result::Result<_, nixpkgs::Error>>()
+        .map_err(|e| Error::QueryPackages { source: e })?;
 
     Ok(fetch_listings_impl(fetcher, jobs, all_paths))
 }

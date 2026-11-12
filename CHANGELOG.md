@@ -1,9 +1,46 @@
-## 0.1.9 - [Unreleased]
+## 0.1.12 [Unreleased]
 ### Added
 ### Fixed
 ### Changed
 
-* `--top-level` is now the default. To use the old default, add `--all`.
+## 0.1.11
+### Added
+
+* Support for zstd-compressed `.ls` listings from Hydra. (#320)
+
+### Fixed
+
+### Changed
+
+* Chore updates of the Flake lock, Cargo dependencies, and CI hardening (pinned actions, minimized permissions).
+
+## 0.1.10
+### Added
+
+* Make extra scopes overridable from CLI. (#301)
+
+### Fixed
+
+* Fixed `command-not-found.nu` to not use `--top-level`. (#276)
+* Respect system certificates. (#289)
+* Drop `xorg` from extra scopes. (#296)
+* Drop `nodePackages` from extra scopes. (#300)
+
+## 0.1.9
+### Added
+
+* `texlive.pkgs` is added to the `EXTRA_SCOPES`, i.e. Texlive packages can be searched now. (#254)
+* Support for command-not-found for Nushell has been added. (#271)
+
+### Fixed
+
+* Packages with no files in the index are now excluded, this significantly reduces the index size (~4MB → 1MB) (#266)
+* debuginfo processing now skips symlinks which were contained inside of `$debug/lib/debug`. (#278)
+
+### Changed
+
+* `--top-level` is now the default. To use the old default, add `--all`. (#243)
+* Chore updates of the Flake lock, dependencies, clippy and a move to `thiserror` rather than `error_chain`. (#279)
 
 ## 0.1.8
 ### Added

@@ -5,21 +5,23 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::process;
 
-use clap::{CommandFactory, Parser};
 use clap_complete::{generate, Shell};
 use error_chain::ChainedError;
+use clap::{CommandFactory, Parser};
 use futures::{future, StreamExt};
-use nix_index::files::FileNode;
+use nix_index::files::{FileNode, FileType};
 use nix_index::hydra::Fetcher;
-use nix_index::listings::fetch_listings;
+use nix_index::listings;
 use nix_index::{errors::*, CACHE_URL};
-use rusqlite::{Connection, DatabaseName};
+use rusqlite::Connection;
 
 /// The main function of this module: creates a new command-not-found database.
 async fn update_index(args: &Args) -> Result<()> {
-    let fetcher = Fetcher::new(CACHE_URL.to_string()).map_err(ErrorKind::ParseProxy)?;
-    let connection =
-        Connection::open_in_memory().map_err(|_| ErrorKind::CreateDatabase(args.output.clone()))?;
+    let fetcher = Fetcher::new(CACHE_URL.to_string()).map_err(Error::ParseProxy)?;
+    let connection = Connection::open_in_memory().map_err(|e| Error::CreateDatabase {
+        path: args.output.clone(),
+        source: Box::new(e),
+    })?;
 
     connection
         .execute(
@@ -33,10 +35,15 @@ async fn update_index(args: &Args) -> Result<()> {
     "#,
             (),
         )
-        .map_err(|_| ErrorKind::CreateDatabase(args.output.clone()))?;
+        .map_err(|e| Error::CreateDatabase {
+            path: args.output.clone(),
+            source: Box::new(e),
+        })?;
 
-    let debug_connection = Connection::open_in_memory()
-        .map_err(|_| ErrorKind::CreateDatabase(args.debug_output.clone()))?;
+    let debug_connection = Connection::open_in_memory().map_err(|e| Error::CreateDatabase {
+        path: args.debug_output.clone(),
+        source: Box::new(e),
+    })?;
     debug_connection
         .execute(
             r#"
@@ -49,7 +56,10 @@ async fn update_index(args: &Args) -> Result<()> {
     "#,
             (),
         )
-        .map_err(|_| ErrorKind::CreateDatabase(args.debug_output.clone()))?;
+        .map_err(|e| Error::CreateDatabase {
+            path: args.debug_output.clone(),
+            source: Box::new(e),
+        })?;
 
     let systems = match &args.systems {
         Some(systems) => systems.iter().map(|x| Some(x.as_str())).collect(),
@@ -57,13 +67,19 @@ async fn update_index(args: &Args) -> Result<()> {
     };
 
     eprint!("+ querying available packages");
-    let (files, watch) =
-        fetch_listings(&fetcher, args.jobs, &args.nixpkgs, systems, args.show_trace)?;
+    let (files, watch) = listings::fetch(
+        &fetcher,
+        args.jobs,
+        &args.nixpkgs,
+        systems,
+        &args.extra_scopes,
+        args.show_trace,
+    )?;
 
     // Treat request errors as if the file list were missing
     let files = files.map(|r| {
         r.unwrap_or_else(|e| {
-            eprint!("\n{}", e.display_chain());
+            eprint!("\n{:?}", e);
             None
         })
     });
@@ -118,10 +134,16 @@ async fn update_index(args: &Args) -> Result<()> {
                             "insert or replace into Programs(name, system, package) values (?, ?, ?)",
                             (binary, system, attr),
                         )
-                        .map_err(|_| ErrorKind::CreateDatabase(args.output.clone()))?;
+                        .map_err(|e| Error::CreateDatabase { path: args.output.clone(), source: Box::new(e) })?;
                 }
 
                 if let Ok(debuginfo) = path.strip_prefix("/lib/debug/.build-id") {
+                    if item.node.get_type() == FileType::Symlink {
+                        // only process actual files here, as there could be symlinks
+                        // to the original binary, sources, etc, which we don't care about
+                        continue;
+                    }
+
                     let build_id: String = debuginfo
                         .to_string_lossy()
                         .replace('/', "")
@@ -134,7 +156,7 @@ async fn update_index(args: &Args) -> Result<()> {
                             "insert or replace into DebugInfo(build_id, url, filename) values (?, ?, ?)",
                             (build_id, format!("../{}", nar), path.to_string_lossy().strip_prefix('/')),
                         )
-                        .map_err(|_| ErrorKind::CreateDatabase(args.debug_output.clone()))?;
+                        .map_err(|e| Error::CreateDatabase { path: args.debug_output.clone(), source: Box::new(e) })?;
                 }
             }
         }
@@ -144,12 +166,18 @@ async fn update_index(args: &Args) -> Result<()> {
     eprint!("+ dumping index");
 
     connection
-        .backup(DatabaseName::Main, &args.output, None)
-        .map_err(|_| ErrorKind::CreateDatabase(args.output.clone()))?;
+        .backup("main", &args.output, None)
+        .map_err(|e| Error::CreateDatabase {
+            path: args.output.clone(),
+            source: Box::new(e),
+        })?;
 
     debug_connection
-        .backup(DatabaseName::Main, &args.debug_output, None)
-        .map_err(|_| ErrorKind::CreateDatabase(args.debug_output.clone()))?;
+        .backup("main", &args.debug_output, None)
+        .map_err(|e| Error::CreateDatabase {
+            path: args.debug_output.clone(),
+            source: Box::new(e),
+        })?;
 
     Ok(())
 }
@@ -184,6 +212,17 @@ struct Args {
     /// Generate shell completions to stdout.
     #[clap(long)]
     completions: Option<Shell>,
+    // We also add some additional sets that only show up in `nix-env -qa -A someSet`.
+    //
+    // Some of these sets are not build directly by hydra. We still include them here
+    // since parts of these sets may be build as dependencies of other packages
+    // that are build by hydra. This way, our attribute path information is more
+    // accurate.
+    //
+    // We only need sets that are not marked "recurseIntoAttrs" here, since if they are,
+    // they are already part of normal_paths.
+    #[clap(long, default_values = ["haskellPackages", "rPackages", "texlive.pkgs"])]
+    extra_scopes: Vec<String>,
 }
 
 #[tokio::main]
@@ -201,15 +240,7 @@ async fn main() {
     }
 
     if let Err(e) = update_index(&args).await {
-        eprintln!("error: {}", e);
-
-        for e in e.iter().skip(1) {
-            eprintln!("caused by: {}", e);
-        }
-
-        if let Some(backtrace) = e.backtrace() {
-            eprintln!("backtrace: {:?}", backtrace);
-        }
+        eprintln!("error: {:?}", e);
         process::exit(2);
     }
 }
