@@ -5,7 +5,9 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
+use clap_complete::{generate, Shell};
+use error_chain::ChainedError;
 use futures::future::Either;
 use futures::{future, StreamExt};
 use nix_index::database::Writer;
@@ -170,6 +172,9 @@ struct Args {
     #[clap(long)]
     path_cache: bool,
 
+    /// Generate shell completions to stdout.
+    #[clap(long)]
+    completions: Option<Shell>,
     // We also add some additional sets that only show up in `nix-env -qa -A someSet`.
     //
     // Some of these sets are not build directly by hydra. We still include them here
@@ -186,6 +191,11 @@ struct Args {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
+
+    if let Some(shell) = args.completions {
+        generate(shell, &mut Args::command(), "nix-index", &mut io::stdout());
+        return;
+    }
 
     if let Err(e) = update_index(&args).await {
         eprintln!("error: {:?}", e);
