@@ -51,10 +51,6 @@ xz2 = "0.1.7"
 zstd = { version = "0.13.3", features = [ "zstdmt" ] }
 clap_complete = "4.5.54"
 
-[dependencies.hyper]
-features = ["client", "http1", "http2", "runtime", "stream"]
-version = "0.14.27"
-
 
 [dependencies.tokio]
 features = ["full"]
